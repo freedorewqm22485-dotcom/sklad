@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Склад</title>
+<script src="supabase.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:#0f172a; color:#e2e8f0; padding:12px; }
+  h1 { font-size: 22px; margin-bottom: 12px; color:#fff; }
+  h2 { font-size: 18px; margin: 16px 0 8px; color:#a5b4fc; }
+  .tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab { padding:10px 16px; background:#1e293b; border-radius:8px; cursor:pointer; border:none; color:#cbd5e1; font-size:14px; }
+  .tab.active { background:#6366f1; color:#fff; }
+  .card { background:#1e293b; border-radius:12px; padding:16px; margin-bottom:14px; }
+  input, select, button { font-size:15px; padding:10px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; width:100%; margin-bottom:8px; }
+  button { background:#6366f1; color:#fff; border:none; cursor:pointer; font-weight:600; }
+  button:hover { background:#4f46e5; }
+  button.secondary { background:#334155; }
+  button.danger { background:#dc2626; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { padding:8px; text-align:left; border-bottom:1px solid #334155; }
+  th { color:#94a3b8; font-weight:600; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:120px; }
+  .status { padding:2px 8px; border-radius:6px; font-size:12px; }
+  .status.ok { background:#166534; color:#bbf7d0; }
+  .status.low { background:#854d0e; color:#fde68a; }
+  .status.none { background:#7f1d1d; color:#fecaca; }
+  .hidden { display:none; }
+  .toast { position:fixed; top:12px; right:12px; background:#6366f1; color:#fff; padding:12px 18px; border-radius:8px; z-index:1000; }
+  .toast.error { background:#dc2626; }
+  .search-wrapper { position: relative; flex: 2; }
+  .search-wrapper input { margin-bottom: 0; }
+  .suggestions {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: #1e293b; border: 1px solid #334155; border-top: none;
+    border-radius: 0 0 8px 8px; max-height: 300px; overflow-y: auto;
+    z-index: 100; display: none;
+  }
+  .suggestions.show { display: block; }
+  .suggestion-item {
+    padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #334155;
+    font-size: 14px; color: #e2e8f0;
+  }
+  .suggestion-item:last-child { border-bottom: none; }
+  .suggestion-item:hover { background: #334155; }
+  .suggestion-item .bc { color: #94a3b8; font-size: 12px; display: block; margin-top: 2px; }
+  .suggestion-item .stock { color: #a5b4fc; font-size: 12px; float: right; }
+  /* Редактируемые поля в таблице */
+  .edit-input {
+    width: 100px; padding: 4px 6px; font-size: 14px;
+    background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 6px; margin: 0;
+  }
+  .summary {
+    background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+    padding: 12px; margin-bottom: 12px; font-size: 15px;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  .summary > div { flex: 1; min-width: 150px; }
+  .summary .label { color: #94a3b8; font-size: 13px; }
+  .summary .value { color: #fff; font-weight: 700; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h1>🔐 Вход в Склад</h1>
+  <div class="card">
+    <input id="loginEmail" type="text" placeholder="Email или имя" value="">
+    <input id="loginPin" type="password" placeholder="PIN" value="">
+    <button onclick="doLogin()">Войти</button>
+  </div>
+</div>
+
+<div id="appScreen" class="hidden">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>📦 Склад</h1>
+    <div>
+      <span id="userInfo" style="font-size:13px; color:#94a3b8; margin-right:8px;"></span>
+      <button class="secondary" style="width:auto; padding:6px 12px;" onclick="logout()">Выйти</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="income" onclick="switchTab('income')">Приход</button>
+    <button class="tab" data-tab="sale" onclick="switchTab('sale')">Продажа</button>
+    <button class="tab" data-tab="stock" onclick="switchTab('stock')">Остатки</button>
+    <button class="tab" data-tab="shift" onclick="switchTab('shift')">Смена</button>
+  </div>
+
+  <!-- ПРИХОД -->
+  <div id="tab-income">
+    <div class="card">
+      <h2>Новый приход</h2>
+      <div class="row">
+        <div class="search-wrapper">
+          <input id="incBarcode" placeholder="Штрихкод или название..." autocomplete="off"
+                 oninput="showSuggestions('inc')" onfocus="showSuggestions('inc')">
+          <div id="incSuggestions" class="suggestions"></div>
+        </div>
+        <input id="incQty" type="number" placeholder="Кол-во" value="1" style="flex:1;">
+        <button style="flex:1;" onclick="addIncomeItem()">Добавить</button>
+      </div>
+      <div id="incNewProduct" class="hidden">
+        <input id="incName" placeholder="Название товара">
+        <input id="incCost" type="number" placeholder="Цена закупки">
+        <input id="incMarkup" type="number" placeholder="Наценка %" value="35">
+        <input id="incMinStock" type="number" placeholder="Мин. остаток" value="0">
+        <button class="secondary" onclick="createProductAndAdd()">Создать товар</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Текущий документ</h2>
+      <table id="incomeTable">
+        <thead><tr>
+          <th>Товар</th><th>Штрихкод</th><th>Кол-во</th>
+          <th>Закупка</th><th>Наценка</th><th>Продажа</th><th>Сумма</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div style="margin-top:10px; text-align:right; font-size:15px;">
+        Итого закупка: <b id="incTotalCost">0</b> ₽ &nbsp;|&nbsp; Продажа: <b id="incTotalPrice">0</b> ₽
+      </div>
+      <button style="margin-top:12px;" onclick="submitIncome()">✅ Провести приход</button>
+    </div>
+
+    <div class="card">
+      <h2>Последние приходы</h2>
+      <div id="incomeHistory">Загрузка...</div>
+    </div>
+  </div>
+
+  <!-- ПРОДАЖА -->
+  <div id="tab-sale" class="hidden">
+    <div class="card">
+      <h2>Продажа</h2>
+      <div class="row">
+        <div class="search-wrapper">
+          <input id="saleBarcode" placeholder="Штрихкод или название..." autocomplete="off"
+                 oninput="showSuggestions('sale')" onfocus="showSuggestions('sale')">
+          <div id="saleSuggestions" class="suggestions"></div>
+        </div>
+        <input id="saleQty" type="number" placeholder="Кол-во" value="1" style="flex:1;">
+        <button style="flex:1;" onclick="doSale()">Продать</button>
+      </div>
+      <div id="saleInfo" style="margin-top:8px; font-size:14px; color:#94a3b8;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Последние продажи</h2>
+      <div id="saleHistory">Загрузка...</div>
+    </div>
+  </div>
+
+  <!-- ОСТАТКИ -->
+  <div id="tab-stock" class="hidden">
+    <div class="card">
+      <h2>Остатки (только в наличии)</h2>
+      <div id="stockSummary" class="summary"></div>
+      <input id="stockSearch" placeholder="Поиск по названию или штрихкоду..." oninput="loadStock()">
+      <div id="stockList">Загрузка...</div>
+    </div>
+  </div>
+
+  <!-- СМЕНА -->
+  <div id="tab-shift" class="hidden">
+    <div class="card">
+      <h2>Закрытие смены</h2>
+      <p style="font-size:14px; color:#94a3b8; margin-bottom:10px;">Будут учтены все продажи, сделанные вами после последнего закрытия смены.</p>
+      <button onclick="closeShift()">🔒 Закрыть смену</button>
+      <div id="shiftResult" style="margin-top:12px;"></div>
+    </div>
+    <div class="card">
+      <h2>История смен</h2>
+      <div id="shiftHistory">Загрузка...</div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const SUPABASE_URL = 'https://ggxuglcikewyvxndatcc.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_xJ3MALl5kLyS961GGhcnLQ_CYjk1r7z';
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let currentUser = null;
+let incomeItems = [];
+let allProducts = [];
+
+function toast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isError ? ' error' : '');
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+function fmt(n) { return Number(n || 0).toFixed(2); }
+
+// ====== ЗАГРУЗКА ТОВАРОВ ======
+async function loadAllProducts() {
+  const { data, error } = await supabaseClient.from('stock_view').select('*').order('name');
+  if (error) { console.error(error); return; }
+  allProducts = data || [];
+}
+
+// ====== ПОИСК С АВТОДОПОЛНЕНИЕМ ======
+function showSuggestions(prefix) {
+  const input = document.getElementById(prefix + 'Barcode');
+  const box = document.getElementById(prefix + 'Suggestions');
+  const q = input.value.trim().toLowerCase();
+  if (!q || q.length < 2) { box.classList.remove('show'); return; }
+  const matches = allProducts.filter(p => 
+    p.name.toLowerCase().includes(q) || p.barcode.includes(q)
+  ).slice(0, 10);
+  if (!matches.length) { box.classList.remove('show'); return; }
+  box.innerHTML = matches.map(p => 
+    `<div class="suggestion-item" onclick="selectProduct('${prefix}', '${p.barcode}')">
+      ${p.name}<span class="stock">${p.stock} шт</span>
+      <span class="bc">${p.barcode}</span>
+    </div>`
+  ).join('');
+  box.classList.add('show');
+}
+function selectProduct(prefix, barcode) {
+  document.getElementById(prefix + 'Barcode').value = barcode;
+  document.getElementById(prefix + 'Suggestions').classList.remove('show');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.search-wrapper')) {
+    document.querySelectorAll('.suggestions').forEach(s => s.classList.remove('show'));
+  }
+});
+
+// ====== АВТОРИЗАЦИЯ ======
+async function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  const pin = document.getElementById('loginPin').value.trim();
+  const { data, error } = await supabaseClient.from('pin_users')
+    .select('*').eq('email', email).eq('pin', pin).eq('is_active', true).maybeSingle();
+  if (error) { toast('Ошибка: ' + error.message, true); return; }
+  if (!data) { toast('Неверный email или PIN', true); return; }
+  currentUser = data;
+  localStorage.setItem('sklad_user', JSON.stringify(data));
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('appScreen').classList.remove('hidden');
+  document.getElementById('userInfo').textContent = `${data.email} (${data.role})`;
+  applyRolePermissions(data.role);
+  await loadAllProducts();
+  loadIncomeHistory();
+  loadSaleHistory();
+  loadStock();
+  loadShiftHistory();
+}
+function logout() {
+  localStorage.removeItem('sklad_user');
+  currentUser = null;
+  location.reload();
+}
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  ['income','sale','stock','shift'].forEach(n => {
+    document.getElementById('tab-' + n).classList.toggle('hidden', n !== name);
+  });
+}
+function applyRolePermissions(role) {
+  const incomeTab = document.querySelector('.tab[data-tab="income"]');
+  const incomeSection = document.getElementById('tab-income');
+  if (role === 'seller') {
+    if (incomeTab) incomeTab.style.display = 'none';
+    if (incomeSection) incomeSection.classList.add('hidden');
+    switchTab('sale');
+  } else {
+    if (incomeTab) incomeTab.style.display = '';
+  }
+}
+
+// ====== ПРИХОД ======
+async function addIncomeItem() {
+  if (currentUser.role !== 'admin') { toast('Только админ может делать приход', true); return; }
+  const barcode = document.getElementById('incBarcode').value.trim();
+  const qty = Number(document.getElementById('incQty').value);
+  if (!barcode || !qty || qty < 1) { toast('Укажите штрихкод и количество', true); return; }
+  const { data: prod, error } = await supabaseClient.from('products').select('*').eq('barcode', barcode).maybeSingle();
+  if (error) { toast(error.message, true); return; }
+  if (!prod) {
+    document.getElementById('incNewProduct').classList.remove('hidden');
+    toast('Товар не найден. Заполните данные и нажмите «Создать товар».');
+    return;
+  }
+  incomeItems.push({
+    barcode: prod.barcode, name: prod.name, quantity: qty,
+    cost: prod.cost, markup: prod.markup, price: prod.price,
+    total: qty * prod.cost
+  });
+  renderIncomeItems();
+  document.getElementById('incBarcode').value = '';
+  document.getElementById('incQty').value = 1;
+  document.getElementById('incSuggestions').classList.remove('show');
+}
+
+async function createProductAndAdd() {
+  const barcode = document.getElementById('incBarcode').value.trim();
+  const name = document.getElementById('incName').value.trim();
+  const cost = Number(document.getElementById('incCost').value) || 0;
+  const markup = Number(document.getElementById('incMarkup').value) || 35;
+  const minStock = Number(document.getElementById('incMinStock').value) || 0;
+  const qty = Number(document.getElementById('incQty').value) || 1;
+  if (!name) { toast('Введите название', true); return; }
+  const price = cost * (1 + markup / 100);
+  const { error } = await supabaseClient.from('products').insert({ barcode, name, cost, markup, price, min_stock: minStock, is_active: true });
+  if (error) { toast(error.message, true); return; }
+  incomeItems.push({ barcode, name, quantity: qty, cost, markup, price, total: qty * cost });
+  renderIncomeItems();
+  document.getElementById('incNewProduct').classList.add('hidden');
+  document.getElementById('incBarcode').value = '';
+  document.getElementById('incQty').value = 1;
+  ['incName','incCost','incMarkup','incMinStock'].forEach(id => document.getElementById(id).value = '');
+  await loadAllProducts();
+}
+
+function renderIncomeItems() {
+  const tbody = document.querySelector('#incomeTable tbody');
+  tbody.innerHTML = '';
+  let totalCost = 0, totalPrice = 0;
+  incomeItems.forEach((it, i) => {
+    totalCost += it.quantity * it.cost;
+    totalPrice += it.quantity * it.price;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${it.name}</td>
+      <td>${it.barcode}</td>
+      <td>${it.quantity}</td>
+      <td><input type="number" class="edit-input" value="${it.cost}" step="0.01" onchange="updateIncomeItem(${i}, 'cost', this.value)"></td>
+      <td><input type="number" class="edit-input" value="${it.markup}" step="0.1" onchange="updateIncomeItem(${i}, 'markup', this.value)"></td>
+      <td><input type="number" class="edit-input" value="${it.price}" step="0.01" onchange="updateIncomeItem(${i}, 'price', this.value)"></td>
+      <td>${fmt(it.quantity * it.cost)}</td>
+      <td><button class="danger" style="padding:4px 8px;" onclick="removeIncomeItem(${i})">×</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('incTotalCost').textContent = fmt(totalCost);
+  document.getElementById('incTotalPrice').textContent = fmt(totalPrice);
+}
+
+function updateIncomeItem(i, field, value) {
+  const num = Number(value) || 0;
+  if (field === 'cost') {
+    incomeItems[i].cost = num;
+    // Пересчёт цены продажи по наценке
+    incomeItems[i].price = num * (1 + incomeItems[i].markup / 100);
+  } else if (field === 'markup') {
+    incomeItems[i].markup = num;
+    incomeItems[i].price = incomeItems[i].cost * (1 + num / 100);
+  } else if (field === 'price') {
+    incomeItems[i].price = num;
+    // Пересчёт наценки обратно
+    if (incomeItems[i].cost > 0) {
+      incomeItems[i].markup = ((num / incomeItems[i].cost) - 1) * 100;
+    }
+  }
+  incomeItems[i].total = incomeItems[i].quantity * incomeItems[i].cost;
+  renderIncomeItems();
+}
+
+function removeIncomeItem(i) { incomeItems.splice(i, 1); renderIncomeItems(); }
+
+async function submitIncome() {
+  if (currentUser.role !== 'admin') { toast('Только админ', true); return; }
+  if (!incomeItems.length) { toast('Добавьте товары', true); return; }
+  const docNumber = 'ПР-' + Date.now();
+  const rows = incomeItems.map(it => ({
+    date: new Date().toISOString(), doc_number: docNumber,
+    barcode: it.barcode, product_name: it.name, quantity: it.quantity,
+    cost: it.cost, markup: it.markup, price: it.price, total: it.quantity * it.cost,
+    user_email: currentUser.email
+  }));
+  const { error } = await supabaseClient.from('income').insert(rows);
+  if (error) { toast(error.message, true); return; }
+  // Обновляем справочник товаров (если цены изменились)
+  for (const it of incomeItems) {
+    await supabaseClient.from('products')
+      .update({ cost: it.cost, markup: it.markup, price: it.price })
+      .eq('barcode', it.barcode);
+  }
+  toast('Приход проведён ✅');
+  incomeItems = [];
+  renderIncomeItems();
+  await loadAllProducts();
+  loadIncomeHistory();
+  loadStock();
+}
+
+async function loadIncomeHistory() {
+  const { data, error } = await supabaseClient.from('income').select('*').order('date', { ascending: false }).limit(30);
+  if (error) { document.getElementById('incomeHistory').textContent = error.message; return; }
+  const grouped = {};
+  (data || []).forEach(r => {
+    if (!grouped[r.doc_number]) grouped[r.doc_number] = { date: r.date, items: [], cancelled: r.is_cancelled };
+    grouped[r.doc_number].items.push(r);
+  });
+  const html = Object.entries(grouped).map(([doc, g]) => {
+    const total = g.items.reduce((s, x) => s + Number(x.total || 0), 0);
+    const status = g.cancelled ? '<span style="color:#f87171;">Отменён</span>' : '';
+    const btn = g.cancelled ? '' : `<button class="danger" style="width:auto; padding:4px 10px; font-size:12px;" onclick="cancelIncome('${doc}')">Отменить</button>`;
+    return `<div style="border-bottom:1px solid #334155; padding:8px 0;"><b>${doc}</b> ${status} — ${new Date(g.date).toLocaleString('ru')} — ${fmt(total)} ₽ ${btn}</div>`;
+  }).join('');
+  document.getElementById('incomeHistory').innerHTML = html || 'Пока нет приходов';
+}
+
+async function cancelIncome(docNumber) {
+  if (currentUser.role !== 'admin') { toast('Только админ', true); return; }
+  if (!confirm('Отменить приход ' + docNumber + '?')) return;
+  const { error } = await supabaseClient.from('income').update({ is_cancelled: true, cancelled_at: new Date().toISOString(), cancelled_by: currentUser.email }).eq('doc_number', docNumber);
+  if (error) { toast(error.message, true); return; }
+  toast('Приход отменён');
+  await loadAllProducts();
+  loadIncomeHistory();
+  loadStock();
+}
+
+// ====== ПРОДАЖА ======
+async function doSale() {
+  const barcode = document.getElementById('saleBarcode').value.trim();
+  const qty = Number(document.getElementById('saleQty').value);
+  if (!barcode || !qty || qty < 1) { toast('Укажите штрихкод и количество', true); return; }
+  const { data: stockRow, error } = await supabaseClient.from('stock_view').select('*').eq('barcode', barcode).maybeSingle();
+  if (error || !stockRow) { toast('Товар не найден', true); return; }
+  if (stockRow.stock < qty) { toast(`Недостаточно. Остаток: ${stockRow.stock}`, true); return; }
+  const { error: insErr } = await supabaseClient.from('expense').insert({
+    date: new Date().toISOString(), doc_number: 'ПРД-' + Date.now(),
+    barcode, product_name: stockRow.name, quantity: qty,
+    price: stockRow.price, total: qty * stockRow.price, user_email: currentUser.email
+  });
+  if (insErr) { toast(insErr.message, true); return; }
+  toast(`Продано: ${stockRow.name} × ${qty}`);
+  document.getElementById('saleBarcode').value = '';
+  document.getElementById('saleQty').value = 1;
+  document.getElementById('saleSuggestions').classList.remove('show');
+  await loadAllProducts();
+  loadSaleHistory();
+  loadStock();
+}
+
+async function loadSaleHistory() {
+  const { data, error } = await supabaseClient.from('expense').select('*').order('date', { ascending: false }).limit(30);
+  if (error) { document.getElementById('saleHistory').textContent = error.message; return; }
+  const html = (data || []).map(r => `<div style="border-bottom:1px solid #334155; padding:6px 0; font-size:13px;">
+    ${r.product_name} × ${r.quantity} = ${fmt(r.total)} ₽ <span style="color:#64748b;">${new Date(r.date).toLocaleString('ru')}</span>
+  </div>`).join('');
+  document.getElementById('saleHistory').innerHTML = html || 'Пока нет продаж';
+}
+
+// ====== ОСТАТКИ (только в наличии) ======
+async function loadStock() {
+  const q = (document.getElementById('stockSearch')?.value || '').toLowerCase();
+  const { data, error } = await supabaseClient.from('stock_view').select('*').order('name');
+  if (error) { document.getElementById('stockList').textContent = error.message; return; }
+  
+  // Фильтр: только товары с остатком > 0
+  let filtered = (data || []).filter(r => Number(r.stock) > 0);
+  
+  // Поиск
+  if (q) filtered = filtered.filter(r => r.name.toLowerCase().includes(q) || r.barcode.includes(q));
+  
+  // Подсчёт итогов
+  let totalQty = 0, totalCost = 0, totalPrice = 0;
+  filtered.forEach(r => {
+    totalQty += Number(r.stock);
+    totalCost += Number(r.stock) * Number(r.cost);
+    totalPrice += Number(r.stock) * Number(r.price);
+  });
+  
+  // Сводка вверху
+  document.getElementById('stockSummary').innerHTML = `
+    <div><div class="label">Позиций</div><div class="value">${filtered.length}</div></div>
+    <div><div class="label">Всего единиц</div><div class="value">${totalQty}</div></div>
+    <div><div class="label">Сумма закупки</div><div class="value">${fmt(totalCost)} ₽</div></div>
+    <div><div class="label">Сумма продажи</div><div class="value">${fmt(totalPrice)} ₽</div></div>
+  `;
+  
+  const html = `<table><thead><tr>
+    <th>Товар</th><th>Кол-во</th><th>Закупка</th><th>Продажа</th><th>Сумма закупки</th><th>Сумма продажи</th>
+  </tr></thead><tbody>` +
+    filtered.map(r => `
+      <tr>
+        <td>${r.name}</td>
+        <td><b>${r.stock}</b></td>
+        <td>${fmt(r.cost)} ₽</td>
+        <td>${fmt(r.price)} ₽</td>
+        <td>${fmt(Number(r.stock) * Number(r.cost))} ₽</td>
+        <td>${fmt(Number(r.stock) * Number(r.price))} ₽</td>
+      </tr>
+    `).join('') + '</tbody></table>';
+  document.getElementById('stockList').innerHTML = html || '<p style="color:#94a3b8; padding:10px;">Нет товаров в наличии</p>';
+}
+
+// ====== СМЕНА ======
+async function closeShift() {
+  const now = new Date();
+  const { data: lastShift } = await supabaseClient.from('shifts').select('*').eq('seller_email', currentUser.email).order('end_time', { ascending: false }).limit(1).maybeSingle();
+  const start = lastShift ? new Date(lastShift.end_time) : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const { data: sales } = await supabaseClient.from('expense').select('*').eq('user_email', currentUser.email).eq('is_cancelled', false).gte('date', start.toISOString()).lte('date', now.toISOString());
+  const totalQty = (sales || []).reduce((s, x) => s + Number(x.quantity || 0), 0);
+  const totalSum = (sales || []).reduce((s, x) => s + Number(x.total || 0), 0);
+  const { error } = await supabaseClient.from('shifts').insert({
+    date: now.toISOString(), seller_email: currentUser.email,
+    start_time: start.toISOString(), end_time: now.toISOString(),
+    positions_count: (sales || []).length, total_qty: totalQty, total_sum: totalSum
+  });
+  if (error) { toast(error.message, true); return; }
+  document.getElementById('shiftResult').innerHTML = `<b>Смена закрыта ✅</b><br>Позиций: ${(sales||[]).length}<br>Товаров: ${totalQty}<br>Сумма: ${fmt(totalSum)} ₽`;
+  toast('Смена закрыта');
+  loadShiftHistory();
+}
+
+async function loadShiftHistory() {
+  const { data, error } = await supabaseClient.from('shifts').select('*').order('date', { ascending: false }).limit(10);
+  if (error) { document.getElementById('shiftHistory').textContent = error.message; return; }
+  const html = (data || []).map(s => `<div style="border-bottom:1px solid #334155; padding:6px 0; font-size:13px;">
+    ${new Date(s.date).toLocaleString('ru')} — ${s.seller_email} — ${s.total_qty} шт — ${fmt(s.total_sum)} ₽
+  </div>`).join('');
+  document.getElementById('shiftHistory').innerHTML = html || 'Пока нет смен';
+}
+
+// ====== АВТОВХОД ======
+(async function autoLogin() {
+  const saved = localStorage.getItem('sklad_user');
+  if (saved) {
+    try {
+      const user = JSON.parse(saved);
+      currentUser = user;
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appScreen').classList.remove('hidden');
+      document.getElementById('userInfo').textContent = `${user.email} (${user.role})`;
+      applyRolePermissions(user.role);
+      await loadAllProducts();
+      loadIncomeHistory();
+      loadSaleHistory();
+      loadStock();
+      loadShiftHistory();
+    } catch(e) {
+      localStorage.removeItem('sklad_user');
+    }
+  }
+})();
+</script>
+</body>
+</html>
